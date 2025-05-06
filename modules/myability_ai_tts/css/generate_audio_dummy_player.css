@@ -1,0 +1,21 @@
+.dummy-audio-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.dummy-audio-wrapper .form-type-submit {
+  margin-top: 0;
+}
+.dummy-audio-wrapper .form-submit {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  /* The button should not be visible, but it should be visibly focusable */
+  background-color: transparent !important;
+  color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.dummy-audio-wrapper audio {
+  display: block;
+}

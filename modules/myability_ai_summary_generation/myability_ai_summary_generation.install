@@ -1,0 +1,78 @@
+<?php
+
+/**
+ * @file
+ * Code for the MyAbility AI Summary Generation module install/update functions.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function myability_ai_summary_generation_schema(): array {
+  $schema['myability_ai_summary_generation_config'] = [
+    'description' => 'Stores summary generation configurations.',
+    'fields' => [
+      'id' => [
+        'description' => 'Primary Key: Unique configuration ID.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ],
+      'source_field' => [
+        'description' => 'The source field for the summary generation.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ],
+      'target_field' => [
+        'description' => 'The target field for the summary generation.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ],
+      'prompt' => [
+        'description' => 'The prompt text for the AI summary generation.',
+        'type' => 'text',
+        'not null' => TRUE,
+      ],
+      'status' => [
+        'description' => 'The status of the configuration (active/inactive).',
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+      ],
+      'entity_type' => [
+        'description' => 'The entity type for which the configuration is defined.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ],
+    ],
+    'primary key' => ['id'],
+  ];
+
+  $schema['myability_ai_summary_generation_config_bundle'] = [
+    'description' => 'Stores the bundles associated with each summary generation configuration.',
+    'fields' => [
+      'config_id' => [
+        'description' => 'The ID of the summary generation configuration.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ],
+      'bundle' => [
+        'description' => 'The bundle associated with the configuration.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ],
+    ],
+    'primary key' => ['config_id', 'bundle'],
+    'indexes' => [
+      'config_id' => ['config_id'],
+    ],
+  ];
+
+  return $schema;
+}

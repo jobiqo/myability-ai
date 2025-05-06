@@ -1,0 +1,888 @@
+<?php
+
+/**
+ * @file
+ * Code for the MyAbility AI Text To Speech module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function myability_ai_tts_menu(): array {
+  $items = [];
+
+  $items['admin/config/myability_ai/text_to_speech'] = [
+    'title' => 'Text To Speech Configurations',
+    'description' => 'Manage AI Text To Speech configurations.',
+    'page callback' => 'myability_ai_tts_settings',
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_NORMAL_ITEM,
+  ];
+
+  $items['admin/config/myability_ai/text_to_speech/configurations'] = [
+    'title' => 'Configurations',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+  ];
+
+  $items['admin/config/myability_ai/text_to_speech/settings'] = [
+    'title' => 'Text To Speech General Settings',
+    'description' => 'Configure general settings for Text To Speech.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_tts_general_settings_form'],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_LOCAL_TASK,
+  ];
+
+  $items['admin/config/myability_ai/text_to_speech/add'] = [
+    'title' => 'Add Text To Speech Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_tts_config_form'],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_LOCAL_ACTION,
+  ];
+
+  $items['admin/config/myability_ai/text_to_speech/%/edit'] = [
+    'title' => 'Edit Text To Speech Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_tts_config_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  $items['admin/config/myability_ai/text_to_speech/%/delete'] = [
+    'title' => 'Delete Text To Speech Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_tts_config_delete_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  return $items;
+}
+
+/**
+ * Form callback for Text To Speech General Settings.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_tts_general_settings_form(array $form, array &$form_state): array {
+  $form['myability_ai_tts_length_limit'] = [
+    '#type' => 'textfield',
+    '#title' => t('TTS Length Limit'),
+    '#description' => t('Set the maximum number of characters allowed for Text To Speech. Leave empty for no limit.'),
+    '#default_value' => variable_get('myability_ai_tts_length_limit'),
+    '#element_validate' => ['element_validate_integer_positive'],
+  ];
+
+  return system_settings_form($form);
+}
+
+/**
+ * Implements hook_entity_info().
+ */
+function myability_ai_tts_entity_info(): array {
+  $info = [];
+
+  $info['myability_ai_tts_config'] = [
+    'label' => t('Text To Speech Config'),
+    'controller class' => 'EntityAPIController',
+    'base table' => 'myability_ai_tts_config',
+    'fieldable' => FALSE,
+    'entity keys' => [
+      'id' => 'id',
+      'label' => 'source_field',
+    ],
+    'bundles' => [
+      'myability_ai_tts_config' => [
+        'label' => t('Text To Speech Config'),
+      ],
+    ],
+  ];
+
+  return $info;
+}
+
+/**
+ * Form callback for adding/editing MyabilityAiTtsConfig entities.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param int|null $config_id
+ *   The configuration ID to edit, null if adding a new configuration.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_tts_config_form(array $form, array &$form_state, ?int $config_id = NULL): array {
+  if ($config_id) {
+    $config = MyabilityAiTtsConfig::load($config_id);
+  }
+  else {
+    $config = new MyabilityAiTtsConfig();
+  }
+
+  // Get all fieldable entity types.
+  $available_entity_types = [];
+  $entity_info = entity_get_info();
+  foreach ($entity_info as $entity_type => $info) {
+    if (!empty($info['fieldable'])) {
+      $available_entity_types[$entity_type] = $entity_type;
+    }
+  }
+
+  $form['#prefix'] = '<div id="form-wrapper">';
+  $form['#suffix'] = '</div>';
+
+  $form['entity_type'] = [
+    '#type' => 'select',
+    '#title' => t('Entity Type'),
+    '#options' => $available_entity_types,
+    '#default_value' => $config->entity_type,
+    '#disabled' => !empty($config->entity_type),
+    '#required' => TRUE,
+    '#ajax' => [
+      'callback' => 'myability_ai_tts_update_conditionals',
+      'wrapper' => 'form-wrapper',
+    ],
+  ];
+
+  $selected_entity_type = !empty($form_state['values']['entity_type']) ? $form_state['values']['entity_type'] : $config->entity_type;
+  $selected_bundles = !empty($form_state['values']['bundles']) ? $form_state['values']['bundles'] : $config->bundles;
+  $selected_bundles = array_filter($selected_bundles);
+
+  // Get all bundles for the selected entity type.
+  $available_bundles = [];
+  if (!empty($selected_entity_type)) {
+    foreach ($entity_info[$selected_entity_type]['bundles'] as $bundle_name => $bundle_info) {
+      $available_bundles[$bundle_name] = $bundle_info['label'];
+    }
+  }
+
+  $form['bundles'] = [
+    '#type' => 'checkboxes',
+    '#title' => t('Bundles'),
+    '#description' => t('Select the bundles to apply this configuration to. Leave empty to apply to all bundles.'),
+    '#options' => $available_bundles,
+    '#default_value' => $config->bundles,
+    '#ajax' => [
+      'callback' => 'myability_ai_tts_update_conditionals',
+      'wrapper' => 'form-wrapper',
+    ],
+  ];
+
+  // Retrieve all fields and filter by type.
+  $fields = field_info_fields();
+  $field_options_source = [];
+  $field_options_target = [];
+
+  if (!empty($selected_entity_type)) {
+    foreach ($fields as $field_name => $field_info) {
+      $allowed_bundles = $field_info['bundles'][$selected_entity_type] ?? [];
+      // Check if the field is present on the selected entity type
+      // and bundle if selected.
+      if (empty($field_info['bundles'][$selected_entity_type])) {
+        continue;
+      }
+      elseif (!empty($selected_bundles)
+        && empty(array_intersect($selected_bundles, $allowed_bundles))
+      ) {
+        continue;
+      }
+
+      if (in_array($field_info['type'], [
+        'text',
+        'text_long',
+        'text_with_summary',
+      ])) {
+        $field_options_source[$field_name] = $field_name;
+      }
+      if ($field_info['type'] == 'file') {
+        $field_options_target[$field_name] = $field_name;
+      }
+    }
+  }
+
+  $form['source_field'] = [
+    '#type' => 'select',
+    '#title' => t('Source Field'),
+    '#options' => $field_options_source,
+    '#default_value' => $config->source_field,
+    '#required' => TRUE,
+  ];
+
+  $form['target_field'] = [
+    '#type' => 'select',
+    '#title' => t('Target Field'),
+    '#description' => t('<strong>Make sure to allow the format selected in the field below in the field settings.</strong>'),
+    '#options' => $field_options_target,
+    '#default_value' => $config->target_field,
+    '#required' => TRUE,
+  ];
+
+  $form['voice'] = [
+    '#type' => 'select',
+    '#title' => t('Voice'),
+    '#options' => [
+      'alloy' => t('Alloy'),
+      'ash' => t('Ash'),
+      'coral' => t('Coral'),
+      'echo' => t('Echo'),
+      'fable' => t('Fable'),
+      'onyx' => t('Onyx'),
+      'nova' => t('Nova'),
+      'sage' => t('Sage'),
+      'shimmer' => t('Shimmer'),
+    ],
+    '#default_value' => $config->voice,
+    '#required' => TRUE,
+  ];
+
+  $form['response_format'] = [
+    '#type' => 'select',
+    '#title' => t('Response Format'),
+    '#options' => [
+      'mp3' => t('MP3'),
+      'wav' => t('WAV'),
+    ],
+    '#default_value' => $config->response_format ?? 'mp3',
+    '#required' => TRUE,
+  ];
+
+  $form['speed'] = [
+    '#type' => 'textfield',
+    '#title' => t('Speed'),
+    '#description' => t('The speed of the speech. Must be between 0.25 and 4.0.'),
+    '#default_value' => $config->speed ?? 1.0,
+    '#required' => TRUE,
+    '#element_validate' => [
+      'element_validate_number',
+      'myability_ai_tts_validate_speed',
+    ],
+  ];
+
+  $form['instructions'] = [
+    '#type' => 'textarea',
+    '#title' => t('Instructions'),
+    '#description' => t('Control the voice of your generated audio with additional instructions.'),
+    '#default_value' => $config->instructions ?? '',
+  ];
+
+  $form['status'] = [
+    '#type' => 'checkbox',
+    '#title' => t('Active'),
+    '#default_value' => $config->status,
+  ];
+
+  $form['actions'] = [
+    '#type' => 'actions',
+  ];
+
+  $form['actions']['submit'] = [
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  ];
+
+  if ($config->id) {
+    $form['config_id'] = [
+      '#type' => 'hidden',
+      '#value' => $config->id,
+    ];
+  }
+
+  return $form;
+}
+
+function myability_ai_tts_validate_speed($element, &$form_state): void {
+  $value = $element['#value'];
+  if ($value < 0.25 || $value > 4.0) {
+    form_error($element, t('The speed must be between 0.25 and 4.0.'));
+  }
+}
+
+/**
+ * AJAX callback to update the bundles field based on the selected entity type.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_tts_update_conditionals(array $form, array &$form_state): array {
+  return $form;
+}
+
+/**
+ * Form submission handler for MyabilityAiTtsConfig entities.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_tts_config_form_submit(array $form, array &$form_state): void {
+  $config = new MyabilityAiTtsConfig();
+  $config->source_field = $form_state['values']['source_field'];
+  $config->target_field = $form_state['values']['target_field'];
+  $config->voice = $form_state['values']['voice'];
+  $config->response_format = $form_state['values']['response_format'];
+  $config->speed = $form_state['values']['speed'];
+  $config->instructions = $form_state['values']['instructions'];
+  $config->entity_type = $form_state['values']['entity_type'];
+  $config->bundles = array_filter($form_state['values']['bundles']);
+  $config->status = $form_state['values']['status'];
+
+  if (!empty($form_state['values']['config_id'])) {
+    $config->id = $form_state['values']['config_id'];
+  }
+
+  $config->save();
+  drupal_set_message(t('The configuration has been saved.'));
+  $form_state['redirect'] = 'admin/config/myability_ai/text_to_speech';
+}
+
+/**
+ * Page callback to list all Text To Speech configurations.
+ *
+ * @return string
+ *   The rendered table of Text To Speech configurations.
+ */
+function myability_ai_tts_settings(): string {
+  $header = [
+    ['data' => t('Entity type'), 'field' => 'entity_type'],
+    ['data' => t('Source Field'), 'field' => 'source_field'],
+    ['data' => t('Target Field'), 'field' => 'target_field'],
+    ['data' => t('Voice'), 'field' => 'voice'],
+    ['data' => t('Format'), 'field' => 'response_format'],
+    ['data' => t('Speed'), 'field' => 'speed'],
+    ['data' => t('Status'), 'field' => 'status'],
+    ['data' => t('Operations')],
+  ];
+
+  $rows = [];
+  $result = db_select('myability_ai_tts_config', 'c')
+    ->fields('c')
+    ->execute();
+
+  foreach ($result as $record) {
+    $edit_url = 'admin/config/myability_ai/text_to_speech/' . $record->id . '/edit';
+    $delete_url = 'admin/config/myability_ai/text_to_speech/' . $record->id . '/delete';
+    $operations = l(t('Edit'), $edit_url) . ' | ' . l(t('Delete'), $delete_url);
+
+    $rows[] = [
+      'data' => [
+        check_plain($record->entity_type),
+        check_plain($record->source_field),
+        check_plain($record->target_field),
+        check_plain($record->voice),
+        check_plain($record->response_format),
+        check_plain($record->speed),
+        $record->status ? t('Active') : t('Inactive'),
+        $operations,
+      ],
+    ];
+  }
+
+  $output = theme('table', ['header' => $header, 'rows' => $rows]);
+
+  return $output;
+}
+
+/**
+ * Form callback for deleting a MyabilityAiTtsConfig entity.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param int $config_id
+ *   The configuration ID to delete.
+ *
+ * @return array
+ *   The confirm form array.
+ */
+function myability_ai_tts_config_delete_form(array $form, array &$form_state, int $config_id): array {
+  $config = MyabilityAiTtsConfig::load($config_id);
+  $form_state['config_id'] = $config_id;
+
+  if (!$config) {
+    drupal_set_message(t('The configuration could not be found.'), 'error');
+    drupal_goto('admin/config/myability_ai/text_to_speech');
+  }
+
+  return confirm_form(
+    $form,
+    t('Are you sure you want to delete the Text To Speech configuration for %source_field?', ['%source_field' => $config->source_field]),
+    'admin/config/myability_ai/text_to_speech',
+    t('This action cannot be undone.'),
+    t('Delete'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Form submission handler for deleting MyabilityAiTtsConfig entity.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_tts_config_delete_form_submit(array $form, array &$form_state): void {
+  $config_id = $form_state['config_id'];
+  $config = MyabilityAiTtsConfig::load($config_id);
+
+  if ($config) {
+    $config->delete();
+    drupal_set_message(t('The configuration has been deleted.'));
+  }
+  else {
+    drupal_set_message(t('The configuration could not be found.'), 'error');
+  }
+
+  $form_state['redirect'] = 'admin/config/myability_ai/text_to_speech';
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ */
+function myability_ai_tts_field_formatter_info(): array {
+  return [
+    'myability_ai_tts_formatter' => [
+      'label' => t('MyAbility AI Text To Speech Formatter'),
+      'field types' => ['file'],
+    ],
+  ];
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function myability_ai_tts_field_formatter_view(string $entity_type, object $entity, array $field, array $instance, string $langcode, array $items, array $display): array {
+  $elements = [];
+  $field_name = $field['field_name'];
+  [, , $bundle] = entity_extract_ids($entity_type, $entity);
+  // If the field value is empty, display the form to generate the audio file.
+  if (empty($items)) {
+    $config = myability_ai_tts_get_config($entity_type, $bundle, $field_name);
+    $limit = variable_get('myability_ai_tts_length_limit');
+    if ($config
+      // Only render form if source field is not empty.
+      && !empty($entity->{$config->source_field}[$langcode][0]['value'])
+      // Only render form if source field text is shorter than the limit,
+      // when one is set.
+      && (empty($limit) || drupal_strlen($entity->{$config->source_field}[$langcode][0]['value']) <= $limit)
+    ) {
+      $elements[0] = drupal_get_form('myability_ai_tts_formatter_generate_form', $entity_type, $entity, $config, $display['settings']);
+    }
+  }
+  else {
+    $instance = field_info_instance($entity_type, $field_name, $bundle);
+    if (module_exists('i18n_field')) {
+      $field_label = i18n_field_translate_property($instance, 'label');
+    }
+    else {
+      $field_label = $instance['label'];
+    }
+    foreach ($items as $delta => $item) {
+      $elements[$delta] = [
+        '#theme' => 'myability_ai_tts_audio',
+        '#file_url' => file_create_url($item['uri']),
+        '#file_mime' => $item['filemime'],
+        '#html_id' => 'tts-' . $item['fid'],
+        '#label' => $field_label,
+      ];
+    }
+  }
+
+  return $elements;
+}
+
+/**
+ * Implements hook_field_formatter_settings_form().
+ */
+function myability_ai_tts_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $settings = $instance['display'][$view_mode]['settings'];
+
+  $form['dummy_audio_generate_button'] = [
+    '#type' => 'checkbox',
+    '#title' => t('Dummy audio generate button'),
+    '#default_value' => $settings['dummy_audio_generate_button'] ?? 0,
+    '#description' => t('If checked, a dummy audio player button will be displayed for generating audio. Audio will play automatically when generated.'),
+  ];
+
+  return $form;
+}
+
+/**
+ * Implements hook_field_formatter_settings_summary().
+ */
+function myability_ai_tts_field_formatter_settings_summary($field, $instance, $view_mode) {
+  $settings = $instance['display'][$view_mode]['settings'];
+  $summary = [];
+
+  if (!empty($settings['dummy_audio_generate_button'])) {
+    $summary[] = t('Dummy audio generate button: Enabled');
+  }
+  else {
+    $summary[] = t('Dummy audio generate button: Disabled');
+  }
+
+  return implode('<br>', $summary);
+}
+
+/**
+ * Form callback to generate speech.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param string $entity_type
+ *   The entity type.
+ * @param object $entity
+ *   The entity object.
+ * @param object $config
+ *   The configuration object.
+ * @param array $formatter_settings
+ *   The formatter settings array.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_tts_formatter_generate_form(array $form, array &$form_state, string $entity_type, object $entity, object $config, array $formatter_settings): array {
+  [$entity_id, , $bundle] = entity_extract_ids($entity_type, $entity);
+  $form_wrapper_id = drupal_html_id('speech-generation-form-wrapper-' . $entity_id);
+  $form['#prefix'] = '<div id="' . $form_wrapper_id . '">';
+  $form['#suffix'] = '</div>';
+
+  $form['messages_wrapper'] = [
+    '#markup' => '<div id="messages-wrapper"></div>',
+  ];
+
+  $form_state['storage']['form_wrapper_id'] = $form_wrapper_id;
+
+  $form_state['config'] = $config;
+
+  $form['entity_type'] = [
+    '#type' => 'hidden',
+    '#value' => $entity_type,
+  ];
+  $form['entity_id'] = [
+    '#type' => 'hidden',
+    '#value' => $entity_id,
+  ];
+
+  $instance = field_info_instance($entity_type, $config->target_field, $bundle);
+  if (module_exists('i18n_field')) {
+    $field_label = i18n_field_translate_property($instance, 'label');
+  }
+  else {
+    $field_label = $instance['label'];
+  }
+
+  $form['submit'] = [
+    '#type' => 'submit',
+    '#value' => t('Text To Speech using AI'),
+    '#id' => drupal_html_id('tts-generate-' . $entity_id),
+    '#ajax' => [
+      'callback' => 'myability_ai_tts_formatter_generate_speech_ajax',
+      'progress' => [
+        'type' => 'throbber',
+        'message' => t('Audio for @field_label is being generated, please wait', [
+          '@field_label' => $field_label,
+        ]),
+      ],
+    ],
+    '#attributes' => [
+      'aria-label' => $field_label,
+    ],
+  ];
+
+  // If dummy button is enabled, add audio player.
+  if (!empty($formatter_settings['dummy_audio_generate_button'])) {
+    drupal_add_css(drupal_get_path('module', 'myability_ai_tts') . '/css/generate_audio_dummy_player.css');
+    drupal_add_js(drupal_get_path('module', 'myability_ai_tts') . '/js/generate_audio_dummy_player.js');
+    $form_state['storage']['autoplay_generated'] = TRUE;
+    // Make dummy audio player non-focusable using tabindex=-"1".
+    $form['submit']['#prefix'] = '<div class="dummy-audio-wrapper"><audio controls tabindex="-1"></audio>';
+    $form['submit']['#suffix'] = '</div>';
+  }
+
+  return $form;
+}
+
+/**
+ * AJAX callback to replace the form with the generated speech file.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_tts_formatter_generate_speech_ajax(array $form, array &$form_state): void {
+  $commands = [];
+  $form_wrapper_selector = '#' . $form_state['storage']['form_wrapper_id'];
+  if (!empty($form_state['storage']['audio_generated'])) {
+    $commands[] = ajax_command_replace($form_wrapper_selector, render($form_state['storage']['audio_html']));
+
+    if (!empty($form_state['storage']['autoplay_generated'])) {
+      // Play the audio file once it is generated.
+      $commands[] = ajax_command_invoke('#tts-' . $form_state['storage']['fid'], 'playAudio');
+    }
+
+    // Allow other modules to alter the commands (e.g. update dependent fields).
+    drupal_alter('myability_ai_tts_success_ajax_commands', $commands, $form, $form_state);
+  }
+  else {
+    drupal_set_message(t('The audio file could not be generated due to an error. Try again later or contact the site administrator.'), 'error');
+    $commands[] = ajax_command_replace($form_wrapper_selector . ' #messages-wrapper', theme('status_messages'));
+  }
+  print ajax_render($commands);
+  exit();
+}
+
+/**
+ * Form submission handler for generating speech.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_tts_formatter_generate_form_submit(array $form, array &$form_state): void {
+  $entity_type = $form_state['values']['entity_type'];
+  $entity_id = $form_state['values']['entity_id'];
+
+  $entity = entity_load_single($entity_type, $entity_id);
+  $config = $form_state['config'];
+
+  $source_text = '';
+  $source_field_langcode = field_language($entity_type, $entity, $config->source_field);
+  foreach ($entity->{$config->source_field}[$source_field_langcode] as $value) {
+    $source_text .= $value['value'] . ' ';
+  }
+  $audio_format = $config->response_format;
+  $voice = $config->voice;
+  $speed = $config->speed;
+  $instructions = $config->instructions ?? '';
+
+  $source_text = strip_tags($source_text);
+
+  // If source text is longer than $limit characters,
+  // split it into chunks on last '.' before the limit.
+  // OpenAI limit is 4096 characters,
+  // we use 2500 to make sure the request does not time out.
+  $limit = 2500;
+  if (drupal_strlen($source_text) > $limit) {
+    $chunks = [];
+    while (drupal_strlen($source_text) > $limit) {
+      $last_period = mb_strrpos(drupal_substr($source_text, 0, $limit), '.');
+      if ($last_period === FALSE) {
+        // Fallback: If no period is found, split at a space.
+        $last_period = mb_strrpos(drupal_substr($source_text, 0, $limit), ' ');
+      }
+      $chunks[] = trim(drupal_substr($source_text, 0, $last_period + 1));
+      $source_text = drupal_substr($source_text, $last_period + 1);
+    }
+    // Add the remaining text as the last chunk.
+    if (!empty($source_text)) {
+      $chunks[] = trim($source_text);
+    }
+  }
+  else {
+    $chunks = [$source_text];
+  }
+
+  // Send the chunks to the TTS API and save the audio file.
+  $result = '';
+  foreach ($chunks as $index => $chunk) {
+    $chunk_instructions = $instructions;
+    if ($index > 0) {
+      // If this is not the first chunk, add a note to the instructions
+      // to avoid confusing intonation changes.
+      $chunk_instructions = 'You are continuing a speech that started earlier. Do not put an emphasis on the start. ' . $chunk_instructions;
+    }
+    $result .= myability_ai_api_send_tts_request($chunk, $voice, $audio_format, $speed, $chunk_instructions);
+  }
+
+  if (!empty($result)) {
+    [, , $bundle] = entity_extract_ids($entity_type, $entity);
+    $field = field_info_field($config->target_field);
+    $uri_scheme = $field['settings']['uri_scheme'];
+    $field_instance = field_info_instance($entity_type, $config->target_field, $bundle);
+    $directory = $uri_scheme . '://' . $field_instance['settings']['file_directory'];
+    // Prepare the directory.
+    file_prepare_directory($directory, FILE_CREATE_DIRECTORY);
+    // Add timestamp to the filename to avoid browser cache issues.
+    $timestamp = REQUEST_TIME;
+    $file = file_save_data($result, $directory . "/speech-$entity_type-$entity_id-$config->target_field-$timestamp.$audio_format", FILE_EXISTS_REPLACE);
+    $entity->{$config->target_field}[$source_field_langcode][0] = [
+      'fid' => $file->fid,
+      'display' => 1,
+    ];
+    entity_save($entity_type, $entity);
+
+    // Re-load the entity to get the updated field value displayed properly.
+    $entity = entity_load_single($entity_type, $entity_id);
+
+    $display = ['type' => 'myability_ai_tts_formatter'];
+    $items = field_get_items($entity_type, $entity, $config->target_field, $display);
+    $output = field_view_value($entity_type, $entity, $config->target_field, $items[0], $display);
+    $form_state['storage']['audio_html'] = $output;
+    $form_state['storage']['audio_generated'] = TRUE;
+    $form_state['storage']['fid'] = $file->fid;
+  }
+}
+
+/**
+ * Retrieves the Text To Speech configuration.
+ *
+ * This function retrieves the active configuration object
+ * for the MyAbility AI Text To Speech module
+ * for a given entity type, bundle and target field.
+ *
+ * @param string $entity_type
+ *   The entity type.
+ * @param string $bundle_name
+ *   The bundle name.
+ * @param string $target_field_name
+ *   The target field name.
+ *
+ * @return object|false
+ *   The configuration object or FALSE if not found.
+ */
+function myability_ai_tts_get_config(string $entity_type, string $bundle_name, string $target_field_name): object|false {
+  $query = "
+    SELECT c.*
+    FROM {myability_ai_tts_config} c
+    LEFT JOIN {myability_ai_tts_config_bundle} b ON c.id = b.config_id
+    WHERE (b.bundle = :bundle_name OR b.bundle IS NULL)
+      AND c.entity_type = :entity_type
+      AND c.target_field = :target_field_name
+      AND c.status = 1
+  ";
+  $result = db_query($query, [
+    ':bundle_name' => $bundle_name,
+    ':entity_type' => $entity_type,
+    ':target_field_name' => $target_field_name,
+  ]);
+
+  foreach ($result as $record) {
+    $source_field_info = field_info_instance($entity_type, $record->source_field, $bundle_name);
+    $target_field_info = field_info_instance($entity_type, $record->target_field, $bundle_name);
+
+    if ($source_field_info && $target_field_info) {
+      return MyabilityAiTtsConfig::load($record->id);
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function myability_ai_tts_theme() {
+  return [
+    'myability_ai_tts_audio' => [
+      'variables' => [
+        'file_url' => NULL,
+        'file_mime' => NULL,
+        'html_id' => NULL,
+        'label' => NULL,
+      ],
+      'template' => 'templates/myability-ai-tts-audio',
+    ],
+  ];
+}
+
+/**
+ * Loads all text to speech configs for a given entity type and bundle.
+ *
+ * @param string $entity_type
+ *   The entity type.
+ * @param string $bundle_name
+ *   The bundle name.
+ *
+ * @return array
+ *   The array of MyabilityAiTtsConfig objects.
+ */
+function myability_ai_tts_load_configs_by_entity(string $entity_type, string $bundle_name): array {
+  $query = "
+    SELECT c.*
+    FROM {myability_ai_tts_config} c
+    LEFT JOIN {myability_ai_tts_config_bundle} b ON c.id = b.config_id
+    WHERE (b.bundle = :bundle_name OR b.bundle IS NULL)
+      AND c.entity_type = :entity_type
+      AND c.status = 1
+  ";
+  $result = db_query($query, [
+    ':bundle_name' => $bundle_name,
+    ':entity_type' => $entity_type,
+  ]);
+
+  $configs = [];
+  foreach ($result as $record) {
+    $configs[] = MyabilityAiTtsConfig::load($record->id);
+  }
+  return $configs;
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function myability_ai_tts_entity_presave($entity, $type) {
+  if (isset($entity->original)) {
+    [, , $bundle] = entity_extract_ids($type, $entity);
+    // Load the configuration for the entity.
+    $configs = myability_ai_tts_load_configs_by_entity($type, $bundle);
+
+    foreach ($configs as $config) {
+      $source_field = $config->source_field;
+      $target_field = $config->target_field;
+      $source_field_langcode = field_language($type, $entity, $source_field);
+      $target_field_langcode = field_language($type, $entity, $target_field);
+      $empty_source_now = empty($entity->{$source_field}[$source_field_langcode][0]['value']);
+      $empty_source_before = empty($entity->original->{$source_field}[$source_field_langcode][0]['value']);
+
+      // Check if the source field has changed.
+      if (($empty_source_before != $empty_source_now)
+        || ($entity->{$source_field}[$source_field_langcode][0]['value'] != $entity->original->{$source_field}[$source_field_langcode][0]['value'])
+      ) {
+        // Delete the target field content.
+        $entity->{$target_field}[$target_field_langcode] = NULL;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_preprocess_HOOK().
+ */
+function myability_ai_tts_preprocess_field(&$variables) {
+  if (!empty($variables['element']['#formatter'])
+    && $variables['element']['#formatter'] == 'myability_ai_tts_formatter'
+  ) {
+    // Add aria-live attribute to the field wrapper to announce changes.
+    $variables['attributes_array']['aria-live'] = 'polite';
+  }
+}

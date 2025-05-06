@@ -1,0 +1,415 @@
+<?php
+
+/**
+ * @file
+ * Code for the MyAbility AI Term Extraction module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function myability_ai_term_extraction_menu() {
+  $items = [];
+
+  $items['admin/config/myability_ai/term_extraction'] = [
+    'title' => 'Term Extraction Configurations',
+    'description' => 'Manage AI term extraction configurations.',
+    'page callback' => 'myability_ai_term_extraction_settings',
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_NORMAL_ITEM,
+  ];
+
+  $items['admin/config/myability_ai/term_extraction/add'] = [
+    'title' => 'Add Term Extraction Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_term_extraction_config_form'],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_LOCAL_ACTION,
+  ];
+
+  $items['admin/config/myability_ai/term_extraction/%/edit'] = [
+    'title' => 'Edit Term Extraction Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_term_extraction_config_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  $items['admin/config/myability_ai/term_extraction/%/delete'] = [
+    'title' => 'Delete Term Extraction Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_term_extraction_config_delete_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  return $items;
+}
+
+/**
+ * Implements hook_entity_info().
+ */
+function myability_ai_term_extraction_entity_info() {
+  $info = [];
+
+  $info['myability_ai_term_extraction_config'] = [
+    'label' => t('Term Extraction Config'),
+    'controller class' => 'EntityAPIController',
+    'base table' => 'myability_ai_term_extraction_config',
+    'fieldable' => FALSE,
+    'entity keys' => [
+      'id' => 'id',
+      'label' => 'source_field',
+    ],
+    'bundles' => [
+      'myability_ai_term_extraction_config' => [
+        'label' => t('Term Extraction Config'),
+      ],
+    ],
+  ];
+
+  return $info;
+}
+
+/**
+ * Form callback for adding/editing MyabilityAITermExtractionConfig entities.
+ */
+function myability_ai_term_extraction_config_form($form, &$form_state, $config_id = NULL) {
+  if ($config_id) {
+    $config = MyabilityAITermExtractionConfig::load($config_id);
+  }
+  else {
+    $config = new MyabilityAITermExtractionConfig();
+  }
+
+  // Get all fieldable entity types.
+  $available_entity_types = [];
+  $entity_info = entity_get_info();
+  foreach ($entity_info as $entity_type => $info) {
+    if (!empty($info['fieldable'])) {
+      $available_entity_types[$entity_type] = $entity_type;
+    }
+  }
+
+  $form['#prefix'] = '<div id="form-wrapper">';
+  $form['#suffix'] = '</div>';
+
+  $form['entity_type'] = [
+    '#type' => 'select',
+    '#title' => t('Entity Type'),
+    '#options' => $available_entity_types,
+    '#default_value' => $config->entity_type,
+    '#disabled' => !empty($config->entity_type),
+    '#required' => TRUE,
+    '#ajax' => [
+      'callback' => 'myability_ai_term_extraction_update_conditionals',
+      'wrapper' => 'form-wrapper',
+    ],
+  ];
+
+  $selected_entity_type = !empty($form_state['values']['entity_type']) ? $form_state['values']['entity_type'] : $config->entity_type;
+  $selected_bundles = !empty($form_state['values']['bundles']) ? $form_state['values']['bundles'] : $config->bundles;
+  $selected_bundles = array_filter($selected_bundles);
+
+  // Get all bundles for the selected entity type.
+  $available_bundles = [];
+  if (!empty($selected_entity_type)) {
+    foreach ($entity_info[$selected_entity_type]['bundles'] as $bundle_name => $bundle_info) {
+      $available_bundles[$bundle_name] = $bundle_info['label'];
+    }
+  }
+
+  $form['bundles'] = [
+    '#type' => 'checkboxes',
+    '#title' => t('Bundles'),
+    '#description' => t('Select the bundles to apply this configuration to. Leave empty to apply to all bundles.'),
+    '#options' => $available_bundles,
+    '#default_value' => $config->bundles,
+    '#ajax' => [
+      'callback' => 'myability_ai_term_extraction_update_conditionals',
+      'wrapper' => 'form-wrapper',
+    ],
+  ];
+
+  // Retrieve all fields and filter by type.
+  $fields = field_info_fields();
+  $field_options_source = [];
+  $field_options_target = [];
+
+  if (!empty($selected_entity_type)) {
+    foreach ($fields as $field_name => $field_info) {
+      $allowed_bundles = $field_info['bundles'][$selected_entity_type] ?? [];
+      // Check if the field is present on the selected entity type
+      // and bundle if selected.
+      if (empty($field_info['bundles'][$selected_entity_type])) {
+        continue;
+      }
+      elseif (!empty($selected_bundles)
+        && empty(array_intersect($selected_bundles, $allowed_bundles))
+      ) {
+        continue;
+      }
+
+      if (in_array($field_info['type'], [
+        'text',
+        'text_long',
+        'text_with_summary',
+      ])) {
+        $field_options_source[$field_name] = $field_name;
+      }
+      if ($field_info['type'] == 'taxonomy_term_reference') {
+        $field_options_target[$field_name] = $field_name;
+      }
+    }
+  }
+
+  $form['source_field'] = [
+    '#type' => 'select',
+    '#title' => t('Source Field'),
+    '#options' => $field_options_source,
+    '#default_value' => $config->source_field,
+    '#required' => TRUE,
+  ];
+
+  $form['target_field'] = [
+    '#type' => 'select',
+    '#title' => t('Target Field'),
+    '#options' => $field_options_target,
+    '#default_value' => $config->target_field,
+    '#required' => TRUE,
+  ];
+
+  $form['prompt'] = [
+    '#type' => 'textarea',
+    '#title' => t('Prompt'),
+    '#default_value' => $config->prompt,
+    '#required' => TRUE,
+  ];
+
+  $form['status'] = [
+    '#type' => 'checkbox',
+    '#title' => t('Active'),
+    '#default_value' => $config->status,
+  ];
+
+  $form['actions'] = [
+    '#type' => 'actions',
+  ];
+
+  $form['actions']['submit'] = [
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  ];
+
+  if ($config->id) {
+    $form['config_id'] = [
+      '#type' => 'hidden',
+      '#value' => $config->id,
+    ];
+  }
+
+  return $form;
+}
+
+/**
+ * AJAX callback to update the bundles field based on the selected entity type.
+ */
+function myability_ai_term_extraction_update_conditionals($form, &$form_state) {
+  return $form;
+}
+
+/**
+ * Form submission handler for MyabilityAITermExtractionConfig entities.
+ */
+function myability_ai_term_extraction_config_form_submit($form, &$form_state) {
+  $config = new MyabilityAITermExtractionConfig();
+  $config->source_field = $form_state['values']['source_field'];
+  $config->target_field = $form_state['values']['target_field'];
+  $config->prompt = $form_state['values']['prompt'];
+  $config->entity_type = $form_state['values']['entity_type'];
+  $config->bundles = array_filter($form_state['values']['bundles']);
+  $config->status = $form_state['values']['status'];
+
+  if (!empty($form_state['values']['config_id'])) {
+    $config->id = $form_state['values']['config_id'];
+  }
+
+  $config->save();
+  drupal_set_message(t('The configuration has been saved.'));
+  $form_state['redirect'] = 'admin/config/myability_ai/term_extraction';
+}
+
+/**
+ * Page callback to list all term extraction configurations.
+ *
+ * @return string
+ *   The rendered table of term extraction configurations.
+ */
+function myability_ai_term_extraction_settings(): string {
+  $header = [
+    ['data' => t('Entity type'), 'field' => 'entity_type'],
+    ['data' => t('Source Field'), 'field' => 'source_field'],
+    ['data' => t('Target Field'), 'field' => 'target_field'],
+    ['data' => t('Status'), 'field' => 'status'],
+    ['data' => t('Operations')],
+  ];
+
+  $rows = [];
+  $result = db_select('myability_ai_term_extraction_config', 'c')
+    ->fields('c')
+    ->execute();
+
+  foreach ($result as $record) {
+    $edit_url = 'admin/config/myability_ai/term_extraction/' . $record->id . '/edit';
+    $delete_url = 'admin/config/myability_ai/term_extraction/' . $record->id . '/delete';
+    $operations = l(t('Edit'), $edit_url) . ' | ' . l(t('Delete'), $delete_url);
+
+    $rows[] = [
+      'data' => [
+        check_plain($record->entity_type),
+        check_plain($record->source_field),
+        check_plain($record->target_field),
+        $record->status ? t('Active') : t('Inactive'),
+        $operations,
+      ],
+    ];
+  }
+
+  $output = theme('table', ['header' => $header, 'rows' => $rows]);
+
+  return $output;
+}
+
+/**
+ * Form callback for deleting a MyabilityAITermExtractionConfig entity.
+ */
+function myability_ai_term_extraction_config_delete_form($form, &$form_state, int $config_id) {
+  $config = MyabilityAITermExtractionConfig::load($config_id);
+  $form_state['config_id'] = $config_id;
+
+  if (!$config) {
+    drupal_set_message(t('The configuration could not be found.'), 'error');
+    drupal_goto('admin/config/myability_ai/term_extraction');
+  }
+
+  return confirm_form(
+    $form,
+    t('Are you sure you want to delete the term extraction configuration for %source_field?', ['%source_field' => $config->source_field]),
+    'admin/config/myability_ai/term_extraction',
+    t('This action cannot be undone.'),
+    t('Delete'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Form submission handler for deleting MyabilityAITermExtractionConfig entity.
+ */
+function myability_ai_term_extraction_config_delete_form_submit($form, &$form_state) {
+  $config_id = $form_state['config_id'];
+  $config = MyabilityAITermExtractionConfig::load($config_id);
+
+  if ($config) {
+    $config->delete();
+    drupal_set_message(t('The configuration has been deleted.'));
+  }
+  else {
+    drupal_set_message(t('The configuration could not be found.'), 'error');
+  }
+
+  $form_state['redirect'] = 'admin/config/myability_ai/term_extraction';
+}
+
+/**
+ * Retrieves all term extraction configurations for a given node bundle.
+ *
+ * @param string $entity_type
+ *   The entity type to retrieve configurations for.
+ * @param string $bundle_name
+ *   The node bundle to retrieve configurations for.
+ *
+ * @return array
+ *   An array of applicable term extraction configurations.
+ */
+function myability_ai_term_extraction_get_applicable_configs(string $entity_type, string $bundle_name): array {
+  $configs = [];
+  // Get all active configurations for the given entity type and bundle.
+  $query = "
+    SELECT c.*
+    FROM {myability_ai_term_extraction_config} c
+    LEFT JOIN {myability_ai_term_extraction_config_bundle} b ON c.id = b.config_id
+    WHERE (b.bundle = :bundle_name OR b.bundle IS NULL) AND c.entity_type = :entity_type AND c.status = 1
+  ";
+  $result = db_query($query, [':bundle_name' => $bundle_name, ':entity_type' => $entity_type]);
+
+  // Check if the source and target fields are present on the entity type.
+  foreach ($result as $record) {
+    $source_field_info = field_info_instance($entity_type, $record->source_field, $bundle_name);
+    $target_field_info = field_info_instance($entity_type, $record->target_field, $bundle_name);
+
+    if ($source_field_info && $target_field_info) {
+      $configs[] = MyabilityAITermExtractionConfig::load($record->id);
+    }
+  }
+
+  return $configs;
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function myability_ai_term_extraction_entity_presave($entity, $type) {
+  // Get bundle name from entity.
+  [$entity_id, , $bundle] = entity_extract_ids($type, $entity);
+  $configs = myability_ai_term_extraction_get_applicable_configs($type, $bundle);
+
+  foreach ($configs as $config) {
+    $source_field_langcode = field_language($type, $entity, $config->source_field);
+    $target_field_langcode = field_language($type, $entity, $config->target_field);
+    if (!empty($entity->{$config->source_field})
+      // Check if the target field is empty or the source field was changed.
+      && (empty($entity->{$config->target_field}[$target_field_langcode]) || (!empty($entity->original->{$config->source_field}) && $entity->original->{$config->source_field}[$source_field_langcode][0]['value'] != $entity->{$config->source_field}[$source_field_langcode][0]['value']))
+    ) {
+      $prompt = $config->prompt;
+      $prompt .= PHP_EOL . ' Return your answer in JSON format with 1 field: "terms" containing an array of the extracted term names. Make sure to return the term names exactly as they appear in the term options list.';
+
+      // Get the options for the target field.
+      $target_field_info = field_info_field($config->target_field);
+      $options = taxonomy_options_list($target_field_info, NULL, $type, $entity);
+      $options_names = array_values($options);
+
+      // Get the text from the source field. Merge multiple values into one.
+      $texts = array_column($entity->{$config->source_field}[$source_field_langcode], 'value');
+      $text = implode(PHP_EOL, $texts);
+
+      // Open an alter hook for the source text.
+      drupal_alter('myability_ai_term_extraction_source_text', $text, $entity, $config);
+
+      $prompt .= PHP_EOL . ' Term options: ' . json_encode($options_names);
+      $prompt .= PHP_EOL . ' Text: ' . $text;
+
+      $response = myability_ai_api_send_chat_request($prompt);
+      $decoded = json_decode($response, TRUE);
+
+      // If we have terms, save them to the target field.
+      if (isset($decoded['terms']) && is_array($decoded['terms'])) {
+        $terms = [];
+        foreach ($decoded['terms'] as $term_name) {
+          $term_id = array_search($term_name, $options);
+          if ($term_id) {
+            $terms[] = ['tid' => $term_id];
+          }
+          else {
+            // Log a warning if the term is not found.
+            watchdog('myability_ai_term_extraction', 'Response term not found while extracting terms for entity_id @entity_id using config @config. Response term name: "@term"', [
+              '@term' => $term_name,
+              '@entity_id' => $entity_id,
+              '@config' => $config->id,
+            ], WATCHDOG_WARNING);
+          }
+        }
+        $entity->{$config->target_field}[$target_field_langcode] = $terms;
+      }
+    }
+  }
+}

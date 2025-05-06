@@ -1,0 +1,39 @@
+<?php
+
+/**
+ * @file
+ * Code for the MyAbility AI module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function myability_ai_menu() {
+  $items = [];
+
+  // Define MyAbility AI menu group containing all config menu items.
+  $items['admin/config/myability_ai'] = [
+    'title' => 'MyAbility AI',
+    'description' => 'MyAbility AI configuration settings.',
+    'position' => 'right',
+    'weight' => 0,
+    'page callback' => 'system_admin_menu_block_page',
+    'access arguments' => ['access administration pages'],
+    'file path' => drupal_get_path('module', 'system'),
+    'file' => 'system.admin.inc',
+  ];
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function myability_ai_permission() {
+  return [
+    'administer myability_ai' => [
+      'title' => t('Administer MyAbility AI'),
+      'description' => t('Manage settings and configurations for the MyAbility AI module.'),
+    ],
+  ];
+}

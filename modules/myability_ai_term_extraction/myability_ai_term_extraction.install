@@ -1,0 +1,82 @@
+<?php
+
+/**
+ * @file
+ * Code for the MyAbility AI Term Extraction module install/update functions.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function myability_ai_term_extraction_schema() {
+  $schema['myability_ai_term_extraction_config'] = [
+    'description' => 'Stores configuration for term extraction.',
+    'fields' => [
+      'id' => [
+        'description' => 'Primary Key: Unique ID for each configuration.',
+        'type' => 'serial',
+        'not null' => TRUE,
+      ],
+      'entity_type' => [
+        'description' => 'The entity type for which the extraction is applied.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+      ],
+      'source_field' => [
+        'description' => 'The name of the source field.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ],
+      'target_field' => [
+        'description' => 'The name of the target field.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ],
+      'prompt' => [
+        'description' => 'The prompt used for term extraction.',
+        'type' => 'text',
+        'not null' => TRUE,
+      ],
+      'status' => [
+        'description' => 'The status of the configuration (1 for active, 0 for inactive).',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 1,
+      ],
+    ],
+    'primary key' => ['id'],
+  ];
+
+  $schema['myability_ai_term_extraction_config_bundle'] = [
+    'description' => 'Stores bundles for which the term extraction configuration should be active.',
+    'fields' => [
+      'config_id' => [
+        'description' => 'The ID of the term extraction configuration.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+      ],
+      'bundle' => [
+        'description' => 'The entity bundle for which the configuration is active.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+      ],
+    ],
+    'primary key' => ['config_id', 'bundle'],
+    'indexes' => [
+      'config_id' => ['config_id'],
+    ],
+    'foreign keys' => [
+      'config_id' => [
+        'table' => 'myability_ai_term_extraction_config',
+        'columns' => ['config_id' => 'id'],
+      ],
+    ],
+  ];
+
+  return $schema;
+}

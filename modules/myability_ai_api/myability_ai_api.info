@@ -1,0 +1,4 @@
+name = MyAbility AI API
+description = OpenAI API integration
+core = 7.x
+package = Myability AI

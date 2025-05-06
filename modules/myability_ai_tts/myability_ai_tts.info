@@ -1,0 +1,8 @@
+name = MyAbility AI Text To Speech
+description = Text To Speech generation using MyAbility AI.
+core = 7.x
+package = Myability AI
+
+dependencies[] = myability_ai
+
+files[] = includes/tts_config.inc

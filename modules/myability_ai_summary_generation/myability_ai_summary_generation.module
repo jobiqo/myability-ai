@@ -1,0 +1,831 @@
+<?php
+
+/**
+ * @file
+ * Code for the MyAbility AI Summary Generation module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function myability_ai_summary_generation_menu(): array {
+  $items = [];
+
+  $items['admin/config/myability_ai/summary_generation'] = [
+    'title' => 'Summary Generation Configurations',
+    'description' => 'Manage AI summary generation configurations.',
+    'page callback' => 'myability_ai_summary_generation_settings',
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_NORMAL_ITEM,
+  ];
+
+  $items['admin/config/myability_ai/summary_generation/add'] = [
+    'title' => 'Add Summary Generation Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_summary_generation_config_form'],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_LOCAL_ACTION,
+  ];
+
+  $items['admin/config/myability_ai/summary_generation/%/edit'] = [
+    'title' => 'Edit Summary Generation Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_summary_generation_config_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  $items['admin/config/myability_ai/summary_generation/%/delete'] = [
+    'title' => 'Delete Summary Generation Config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_summary_generation_config_delete_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  $items['admin/config/myability_ai/summary_generation/%/delete_all_summaries'] = [
+    'title' => 'Delete All Summaries',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_summary_generation_delete_all_summaries_confirm_form', 4],
+    'access arguments' => ['administer myability_ai'],
+    'type' => MENU_CALLBACK,
+  ];
+
+  return $items;
+}
+
+/**
+ * Implements hook_entity_info().
+ */
+function myability_ai_summary_generation_entity_info(): array {
+  $info = [];
+
+  $info['myability_ai_summary_generation_config'] = [
+    'label' => t('Summary Generation Config'),
+    'controller class' => 'EntityAPIController',
+    'base table' => 'myability_ai_summary_generation_config',
+    'fieldable' => FALSE,
+    'entity keys' => [
+      'id' => 'id',
+      'label' => 'source_field',
+    ],
+    'bundles' => [
+      'myability_ai_summary_generation_config' => [
+        'label' => t('Summary Generation Config'),
+      ],
+    ],
+  ];
+
+  return $info;
+}
+
+/**
+ * Form callback for adding/editing MyabilityAISummaryGenerationConfig entities.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param int|null $config_id
+ *   The configuration ID to edit, null if adding a new configuration.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_summary_generation_config_form(array $form, array &$form_state, ?int $config_id = NULL): array {
+  if ($config_id) {
+    $config = MyabilityAISummaryGenerationConfig::load($config_id);
+  }
+  else {
+    $config = new MyabilityAISummaryGenerationConfig();
+  }
+
+  // Get all fieldable entity types.
+  $available_entity_types = [];
+  $entity_info = entity_get_info();
+  foreach ($entity_info as $entity_type => $info) {
+    if (!empty($info['fieldable'])) {
+      $available_entity_types[$entity_type] = $entity_type;
+    }
+  }
+
+  $form['#prefix'] = '<div id="form-wrapper">';
+  $form['#suffix'] = '</div>';
+
+  $form['entity_type'] = [
+    '#type' => 'select',
+    '#title' => t('Entity Type'),
+    '#options' => $available_entity_types,
+    '#default_value' => $config->entity_type,
+    '#disabled' => !empty($config->entity_type),
+    '#required' => TRUE,
+    '#ajax' => [
+      'callback' => 'myability_ai_summary_generation_update_conditionals',
+      'wrapper' => 'form-wrapper',
+    ],
+  ];
+
+  $selected_entity_type = !empty($form_state['values']['entity_type']) ? $form_state['values']['entity_type'] : $config->entity_type;
+  $selected_bundles = !empty($form_state['values']['bundles']) ? $form_state['values']['bundles'] : $config->bundles;
+  $selected_bundles = array_filter($selected_bundles);
+
+  // Get all bundles for the selected entity type.
+  $available_bundles = [];
+  if (!empty($selected_entity_type)) {
+    foreach ($entity_info[$selected_entity_type]['bundles'] as $bundle_name => $bundle_info) {
+      $available_bundles[$bundle_name] = $bundle_info['label'];
+    }
+  }
+
+  $form['bundles'] = [
+    '#type' => 'checkboxes',
+    '#title' => t('Bundles'),
+    '#description' => t('Select the bundles to apply this configuration to. Leave empty to apply to all bundles.'),
+    '#options' => $available_bundles,
+    '#default_value' => $config->bundles,
+    '#ajax' => [
+      'callback' => 'myability_ai_summary_generation_update_conditionals',
+      'wrapper' => 'form-wrapper',
+    ],
+  ];
+
+  // Retrieve all fields and filter by type.
+  $fields = field_info_fields();
+  $field_options = [];
+
+  if (!empty($selected_entity_type)) {
+    foreach ($fields as $field_name => $field_info) {
+      $allowed_bundles = $field_info['bundles'][$selected_entity_type] ?? [];
+      // Check if the field is present on the selected entity type
+      // and bundle if selected.
+      if (empty($field_info['bundles'][$selected_entity_type])) {
+        continue;
+      }
+      elseif (!empty($selected_bundles)
+        && empty(array_intersect($selected_bundles, $allowed_bundles))
+      ) {
+        continue;
+      }
+
+      if (in_array($field_info['type'], [
+        'text',
+        'text_long',
+        'text_with_summary',
+      ])) {
+        $field_options[$field_name] = $field_name;
+      }
+    }
+  }
+
+  $form['source_field'] = [
+    '#type' => 'select',
+    '#title' => t('Source Field'),
+    '#options' => $field_options,
+    '#default_value' => $config->source_field,
+    '#required' => TRUE,
+  ];
+
+  $form['target_field'] = [
+    '#type' => 'select',
+    '#title' => t('Target Field'),
+    '#options' => $field_options,
+    '#default_value' => $config->target_field,
+    '#required' => TRUE,
+  ];
+
+  $form['prompt'] = [
+    '#type' => 'textarea',
+    '#title' => t('Prompt'),
+    '#default_value' => $config->prompt,
+    '#required' => TRUE,
+  ];
+
+  $form['status'] = [
+    '#type' => 'checkbox',
+    '#title' => t('Active'),
+    '#default_value' => $config->status,
+  ];
+
+  $form['actions'] = [
+    '#type' => 'actions',
+  ];
+
+  $form['actions']['submit'] = [
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  ];
+
+  if ($config->id) {
+    $form['config_id'] = [
+      '#type' => 'hidden',
+      '#value' => $config->id,
+    ];
+  }
+
+  $form['actions']['delete_all_summaries'] = [
+    '#markup' => '<div>' . t('<p>If you changed an important setting/prompt, you might want to delete all generated summaries. <strong>Beware that re-generating a lot of content is a costly process and the deletion functionality should be used with caution.</strong></p>') . l(t('Delete all summaries'), 'admin/config/myability_ai/summary_generation/' . $config->id . '/delete_all_summaries', [
+      'attributes' => ['class' => ['button']],
+    ]) . '</div>',
+  ];
+
+  return $form;
+}
+
+/**
+ * AJAX callback to update the bundles field based on the selected entity type.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_summary_generation_update_conditionals(array $form, array &$form_state): array {
+  return $form;
+}
+
+/**
+ * Form submission handler for MyabilityAISummaryGenerationConfig entities.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_config_form_submit(array $form, array &$form_state): void {
+  $config = new MyabilityAISummaryGenerationConfig();
+  $config->source_field = $form_state['values']['source_field'];
+  $config->target_field = $form_state['values']['target_field'];
+  $config->prompt = $form_state['values']['prompt'];
+  $config->entity_type = $form_state['values']['entity_type'];
+  $config->bundles = array_filter($form_state['values']['bundles']);
+  $config->status = $form_state['values']['status'];
+
+  if (!empty($form_state['values']['config_id'])) {
+    $config->id = $form_state['values']['config_id'];
+  }
+
+  $config->save();
+  drupal_set_message(t('The configuration has been saved.'));
+  $form_state['redirect'] = 'admin/config/myability_ai/summary_generation';
+}
+
+/**
+ * Page callback to list all summary generation configurations.
+ *
+ * @return string
+ *   The rendered table of summary generation configurations.
+ */
+function myability_ai_summary_generation_settings(): string {
+  $header = [
+    ['data' => t('Entity type'), 'field' => 'entity_type'],
+    ['data' => t('Source Field'), 'field' => 'source_field'],
+    ['data' => t('Target Field'), 'field' => 'target_field'],
+    ['data' => t('Status'), 'field' => 'status'],
+    ['data' => t('Operations')],
+  ];
+
+  $rows = [];
+  $result = db_select('myability_ai_summary_generation_config', 'c')
+    ->fields('c')
+    ->execute();
+
+  foreach ($result as $record) {
+    $edit_url = 'admin/config/myability_ai/summary_generation/' . $record->id . '/edit';
+    $delete_url = 'admin/config/myability_ai/summary_generation/' . $record->id . '/delete';
+    $operations = l(t('Edit'), $edit_url) . ' | ' . l(t('Delete'), $delete_url);
+
+    $rows[] = [
+      'data' => [
+        check_plain($record->entity_type),
+        check_plain($record->source_field),
+        check_plain($record->target_field),
+        $record->status ? t('Active') : t('Inactive'),
+        $operations,
+      ],
+    ];
+  }
+
+  $output = theme('table', ['header' => $header, 'rows' => $rows]);
+
+  return $output;
+}
+
+/**
+ * Form callback for deleting a MyabilityAISummaryGenerationConfig entity.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param int $config_id
+ *   The configuration ID to delete.
+ *
+ * @return array
+ *   The confirm form array.
+ */
+function myability_ai_summary_generation_config_delete_form(array $form, array &$form_state, int $config_id): array {
+  $config = MyabilityAISummaryGenerationConfig::load($config_id);
+  $form_state['config_id'] = $config_id;
+
+  if (!$config) {
+    drupal_set_message(t('The configuration could not be found.'), 'error');
+    drupal_goto('admin/config/myability_ai/summary_generation');
+  }
+
+  return confirm_form(
+    $form,
+    t('Are you sure you want to delete the summary generation configuration for %source_field?', ['%source_field' => $config->source_field]),
+    'admin/config/myability_ai/summary_generation',
+    t('This action cannot be undone.'),
+    t('Delete'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Submission handler for deleting MyabilityAISummaryGenerationConfig entity.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_config_delete_form_submit(array $form, array &$form_state): void {
+  $config_id = $form_state['config_id'];
+  $config = MyabilityAISummaryGenerationConfig::load($config_id);
+
+  if ($config) {
+    $config->delete();
+    drupal_set_message(t('The configuration has been deleted.'));
+  }
+  else {
+    drupal_set_message(t('The configuration could not be found.'), 'error');
+  }
+
+  $form_state['redirect'] = 'admin/config/myability_ai/summary_generation';
+}
+
+/**
+ * @file
+ * Code for the MyAbility AI Summary Formatter module.
+ */
+
+/**
+ * Implements hook_field_formatter_info().
+ */
+function myability_ai_summary_generation_field_formatter_info(): array {
+  return [
+    'myability_ai_summary_formatter' => [
+      'label' => t('MyAbility AI Summary Formatter'),
+      'field types' => ['text', 'text_long', 'text_with_summary'],
+    ],
+  ];
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function myability_ai_summary_generation_field_formatter_view(string $entity_type, object $entity, array $field, array $instance, string $langcode, array $items, array $display): array {
+  $elements = [];
+  $field_name = $field['field_name'];
+  // If the field value is empty, display the form to generate the summary.
+  if (empty($items)) {
+    [, , $bundle] = entity_extract_ids($entity_type, $entity);
+    $config = myability_ai_summary_generation_get_config($entity_type, $bundle, $field_name);
+    if ($config) {
+      $elements[0] = drupal_get_form('myability_ai_summary_generation_formatter_generate_form', $entity_type, $entity, $config);
+    }
+  }
+  else {
+    foreach ($items as $delta => $item) {
+      if (!empty($item['format'])) {
+        $output = _text_sanitize($instance, $langcode, $item, 'value');
+      }
+      else {
+        $output = strip_tags($item['value']);
+      }
+      $elements[$delta] = [
+        '#markup' => $output,
+      ];
+    }
+  }
+
+  return $elements;
+}
+
+/**
+ * Form callback to generate summary.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param string $entity_type
+ *   The entity type.
+ * @param object $entity
+ *   The entity object.
+ * @param object $config
+ *   The configuration object.
+ *
+ * @return array
+ *   The form array.
+ */
+function myability_ai_summary_generation_formatter_generate_form(array $form, array &$form_state, string $entity_type, object $entity, object $config): array {
+  [$entity_id, , $bundle] = entity_extract_ids($entity_type, $entity);
+  $form_wrapper_id = drupal_html_id('summary-generation-form-wrapper-' . $entity_id);
+  $form['#prefix'] = '<div id="' . $form_wrapper_id . '">';
+  $form['#suffix'] = '</div>';
+
+  $form['messages_wrapper'] = [
+    '#markup' => '<div id="messages-wrapper"></div>',
+  ];
+
+  $form_state['storage']['form_wrapper_id'] = $form_wrapper_id;
+
+  $form_state['config'] = $config;
+
+  $form['entity_type'] = [
+    '#type' => 'hidden',
+    '#value' => $entity_type,
+  ];
+  $form['entity_id'] = [
+    '#type' => 'hidden',
+    '#value' => $entity_id,
+  ];
+
+  $instance = field_info_instance($entity_type, $config->target_field, $bundle);
+  if (module_exists('i18n_field')) {
+    $field_label = i18n_field_translate_property($instance, 'label');
+  }
+  else {
+    $field_label = $instance['label'];
+  }
+
+  $form['submit'] = [
+    '#type' => 'submit',
+    '#value' => t('Generate Summary using AI'),
+    '#id' => drupal_html_id('summary-generate-' . $entity_id),
+    '#ajax' => [
+      'callback' => 'myability_ai_summary_generation_formatter_generate_summary',
+      'progress' => [
+        'type' => 'throbber',
+        'message' => t('Summary for @field_label is being generated, please wait', [
+          '@field_label' => $field_label,
+        ]),
+      ],
+    ],
+  ];
+
+  return $form;
+}
+
+/**
+ * AJAX callback to replace the form with the generated summary.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_formatter_generate_summary(array $form, array &$form_state): void {
+  $commands = [];
+  $form_wrapper_selector = '#' . $form_state['storage']['form_wrapper_id'];
+  if (!empty($form_state['storage']['summary_generated'])) {
+    $commands[] = ajax_command_replace($form_wrapper_selector, render($form_state['storage']['summary_text']));
+
+    // Allow other modules to alter the commands (e.g. update dependent fields).
+    drupal_alter('myability_ai_summary_generation_success_ajax_commands', $commands, $form, $form_state);
+  }
+  else {
+    drupal_set_message(t('The summary could not be generated due to an error. Try again later or contact the site administrator.'), 'error');
+    $commands[] = ajax_command_replace($form_wrapper_selector . ' #messages-wrapper', theme('status_messages'));
+  }
+  print ajax_render($commands);
+  exit();
+}
+
+/**
+ * Form submission handler for generating summary.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_formatter_generate_form_submit(array $form, array &$form_state): void {
+  $entity_type = $form_state['values']['entity_type'];
+  $entity_id = $form_state['values']['entity_id'];
+
+  $entity = entity_load_single($entity_type, $entity_id);
+  $config = $form_state['config'];
+
+  $source_text = '';
+  $source_field_langcode = field_language($entity_type, $entity, $config->source_field);
+  foreach ($entity->{$config->source_field}[$source_field_langcode] as $value) {
+    $source_text .= $value['value'] . ' ';
+  }
+
+  $prompt = $config->prompt . ' Return your answer in JSON format with 1 field: "summary" containing the summarized text in the same language as source text.' . PHP_EOL . ' Source text: ' . $source_text;
+  $result = myability_ai_api_send_chat_request($prompt);
+  $result = json_decode($result, TRUE);
+
+  if (!empty($result['summary'])) {
+    $summary = $result['summary'];
+
+    $target_field_langcode = field_language($entity_type, $entity, $config->target_field);
+    $summary_value = [
+      'value' => $summary,
+    ];
+
+    $instance = field_info_instance($entity_type, $config->target_field, $entity->type);
+    if (!empty($instance['settings']['text_processing'])) {
+      $summary_value['format'] = filter_default_format();
+    }
+
+    $entity->{$config->target_field}[$target_field_langcode][0] = $summary_value;
+
+    $display = ['type' => 'myability_ai_summary_formatter'];
+    $items = field_get_items($entity_type, $entity, $config->target_field, $display);
+    $output = field_view_value($entity_type, $entity, $config->target_field, $items[0], $display);
+    $form_state['storage']['summary_text'] = $output;
+    entity_save($entity_type, $entity);
+    $form_state['storage']['summary_generated'] = TRUE;
+  }
+}
+
+/**
+ * Retrieves the summary generation configuration.
+ *
+ * This function retrieves the active configuration object
+ * for the MyAbility AI Summary Generation module
+ * for a given entity type, bundle and target field.
+ *
+ * @param string $entity_type
+ *   The entity type.
+ * @param string $bundle_name
+ *   The bundle name.
+ * @param string $target_field_name
+ *   The target field name.
+ *
+ * @return object|false
+ *   The configuration object or FALSE if not found.
+ */
+function myability_ai_summary_generation_get_config(string $entity_type, string $bundle_name, string $target_field_name): object|false {
+  $query = "
+    SELECT c.*
+    FROM {myability_ai_summary_generation_config} c
+    LEFT JOIN {myability_ai_summary_generation_config_bundle} b ON c.id = b.config_id
+    WHERE (b.bundle = :bundle_name OR b.bundle IS NULL)
+      AND c.entity_type = :entity_type
+      AND c.target_field = :target_field_name
+      AND c.status = 1
+  ";
+  $result = db_query($query, [
+    ':bundle_name' => $bundle_name,
+    ':entity_type' => $entity_type,
+    ':target_field_name' => $target_field_name,
+  ]);
+
+  foreach ($result as $record) {
+    $source_field_info = field_info_instance($entity_type, $record->source_field, $bundle_name);
+    $target_field_info = field_info_instance($entity_type, $record->target_field, $bundle_name);
+
+    if ($source_field_info && $target_field_info) {
+      return MyabilityAISummaryGenerationConfig::load($record->id);
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Loads all summary generation configs for a given entity type and bundle.
+ *
+ * @param string $entity_type
+ *   The entity type.
+ * @param string $bundle_name
+ *   The bundle name.
+ *
+ * @return array
+ *   The array of MyabilityAISummaryGenerationConfig objects.
+ */
+function myability_ai_summary_generation_load_configs_by_entity(string $entity_type, string $bundle_name): array {
+  $query = "
+    SELECT c.*
+    FROM {myability_ai_summary_generation_config} c
+    LEFT JOIN {myability_ai_summary_generation_config_bundle} b ON c.id = b.config_id
+    WHERE (b.bundle = :bundle_name OR b.bundle IS NULL)
+      AND c.entity_type = :entity_type
+      AND c.status = 1
+  ";
+  $result = db_query($query, [
+    ':bundle_name' => $bundle_name,
+    ':entity_type' => $entity_type,
+  ]);
+
+  $configs = [];
+  foreach ($result as $record) {
+    $configs[] = MyabilityAISummaryGenerationConfig::load($record->id);
+  }
+  return $configs;
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function myability_ai_summary_generation_entity_presave($entity, $type) {
+  if (isset($entity->original)) {
+    [, , $bundle] = entity_extract_ids($type, $entity);
+    // Load the configuration for the entity.
+    $configs = myability_ai_summary_generation_load_configs_by_entity($type, $bundle);
+
+    foreach ($configs as $config) {
+      $source_field = $config->source_field;
+      $target_field = $config->target_field;
+      $source_field_langcode = field_language($type, $entity, $source_field);
+      $target_field_langcode = field_language($type, $entity, $target_field);
+      $empty_source_now = empty($entity->{$source_field}[$source_field_langcode][0]['value']);
+      $empty_source_before = empty($entity->original->{$source_field}[$source_field_langcode][0]['value']);
+
+      // Check if the source field has changed.
+      if (($empty_source_before != $empty_source_now)
+         || ($entity->{$source_field}[$source_field_langcode][0]['value'] != $entity->original->{$source_field}[$source_field_langcode][0]['value'])
+      ) {
+        // Delete the target field content.
+        $entity->{$target_field}[$target_field_langcode] = NULL;
+      }
+    }
+  }
+}
+
+/**
+ * Confirmation form for deleting all generated summaries.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ * @param int $config_id
+ *   The configuration ID for which to delete all summaries.
+ *
+ * @return array
+ *   The confirm form array.
+ */
+function myability_ai_summary_generation_delete_all_summaries_confirm_form(array $form, array &$form_state, int $config_id): array {
+  $form['confirm_checkbox'] = [
+    '#type' => 'checkbox',
+    '#title' => t('I understand that this action will delete all the summaries and they will have to be re-generated'),
+    '#required' => TRUE,
+  ];
+  $config = MyabilityAISummaryGenerationConfig::load($config_id);
+  $form_state['storage']['config'] = $config;
+  $target_field = $config->target_field;
+  return confirm_form(
+    $form,
+    t('Are you sure you want to delete all summaries from @field?', [
+      '@field' => $target_field,
+    ]),
+    'admin/config/myability_ai/summary_generation',
+    t('This action cannot be undone.'),
+    t('Delete all summaries'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Form submission handler for deleting all summaries.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array $form_state
+ *   The form state array.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_delete_all_summaries_confirm_form_submit(array $form, array &$form_state): void {
+  $config = $form_state['storage']['config'];
+  $entity_type = $config->entity_type;
+  $bundles = $config->bundles;
+  $target_field = $config->target_field;
+
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', $entity_type);
+  if (!empty($bundles)) {
+    $query->entityCondition('bundle', $bundles, 'IN');
+  }
+  $query->fieldCondition($target_field, NULL, 'IS NOT NULL');
+
+  $result = $query->execute();
+  if (!empty($result[$entity_type])) {
+    $entity_ids = array_keys($result[$entity_type]);
+
+    $batch = [
+      'title' => t('Deleting all summaries...'),
+      'operations' => [
+        ['myability_ai_summary_generation_delete_summaries_batch', [$config, $entity_ids]],
+      ],
+      'finished' => 'myability_ai_summary_generation_delete_all_summaries_finished',
+      'file' => drupal_get_path('module', 'myability_ai_summary_generation') . '/myability_ai_summary_generation.module',
+    ];
+
+    batch_set($batch);
+  }
+  else {
+    drupal_set_message(t('No summaries found to delete.'));
+  }
+
+  $form_state['redirect'] = 'admin/config/myability_ai/summary_generation';
+}
+
+/**
+ * Batch operation to delete summaries.
+ *
+ * @param MyabilityAISummaryGenerationConfig $config
+ *   The configuration object.
+ * @param array $entity_ids
+ *   The entity IDs to process.
+ * @param array $context
+ *   The batch context.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_delete_summaries_batch(MyabilityAISummaryGenerationConfig $config, array $entity_ids, array &$context): void {
+  $limit = 10;
+
+  if (empty($context['sandbox'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['max'] = count($entity_ids);
+    $context['sandbox']['entity_ids'] = $entity_ids;
+  }
+
+  $entity_type = $config->entity_type;
+  $target_field = $config->target_field;
+  $current_ids = array_splice($context['sandbox']['entity_ids'], 0, $limit);
+  $entities = entity_load($entity_type, $current_ids);
+  foreach ($entities as $entity) {
+    $entity->{$target_field} = NULL;
+    entity_save($entity_type, $entity);
+  }
+
+  $context['sandbox']['progress'] += count($current_ids);
+  $context['results']['deleted'] = $context['sandbox']['progress'];
+  $context['results']['config_id'] = $config->id;
+  $context['message'] = t('Processed @count of @total entities.', [
+    '@count' => $context['sandbox']['progress'],
+    '@total' => $context['sandbox']['max'],
+  ]);
+
+  if ($context['sandbox']['progress'] < $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+  }
+}
+
+/**
+ * Batch finished callback for deleting all summaries.
+ *
+ * @param bool $success
+ *   Whether the batch operation was successful.
+ * @param array $results
+ *   The results of the batch operation.
+ * @param array $operations
+ *   The operations that were performed.
+ *
+ * @return void
+ */
+function myability_ai_summary_generation_delete_all_summaries_finished(bool $success, array $results, array $operations): void {
+  if ($success) {
+    drupal_set_message(t('All summaries have been deleted. @total summaries deleted in total.', [
+      '@total' => $results['deleted'],
+    ]));
+    watchdog('myability_ai_summary_generation', '@total summaries deleted for config @config_id', [
+      '@total' => $results['deleted'],
+      '@config_id' => $results['config_id'],
+    ]);
+  }
+  else {
+    drupal_set_message(t('An error occurred while deleting summaries.'), 'error');
+  }
+}
+
+/**
+ * Implements hook_preprocess_HOOK().
+ */
+function myability_ai_summary_generation_preprocess_field(&$variables) {
+  if (!empty($variables['element']['#formatter'])
+    && $variables['element']['#formatter'] == 'myability_ai_summary_formatter'
+  ) {
+    // Add aria-live attribute to the field wrapper to announce changes.
+    $variables['attributes_array']['aria-live'] = 'polite';
+  }
+}

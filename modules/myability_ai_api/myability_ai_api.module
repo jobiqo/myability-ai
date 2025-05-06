@@ -1,0 +1,172 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function myability_ai_api_menu() {
+  $items = [];
+
+  $items['admin/config/myability_ai/api'] = [
+    'title' => 'MyAbility AI API',
+    'description' => 'Configure settings for MyAbility AI API integration.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['myability_ai_api_settings_form'],
+    'access arguments' => ['administer myability_ai'],
+  ];
+
+  return $items;
+}
+
+/**
+ * Form callback for MyAbility AI API settings.
+ *
+ * @param array $form
+ *   The form array.
+ * @param array &$form_state
+ *   The form state array.
+ *
+ * @return array
+ */
+function myability_ai_api_settings_form(array $form, array &$form_state): array {
+  $form['myability_ai_api_key'] = [
+    '#type' => 'textfield',
+    '#title' => t('OpenAI API Key'),
+    '#default_value' => variable_get('myability_ai_api_key', ''),
+    '#description' => t('Enter your OpenAI API key. This key is needed for all AI functionality including text generation and text-to-speech.'),
+    '#required' => TRUE,
+    '#maxlength' => 255,
+  ];
+
+  return system_settings_form($form);
+}
+
+/**
+ * @file
+ * Code for the MyAbility AI API module.
+ */
+
+/**
+ * Helper function that sends a request to OpenAI.
+ *
+ * @param string $prompt
+ *   The Open AI prompt.
+ * @param float $temperature
+ *   Temperature to influence the response.
+ * @param string $model
+ *   The Open AI language model.
+ * @param bool $as_json
+ *   If the response should be returned as JSON.
+ *
+ * @return string
+ *   Text from Open AI if possible.
+ */
+function myability_ai_api_send_chat_request(string $prompt, float $temperature = 0.2, $model = 'gpt-4o', bool $as_json = TRUE): string {
+  $api_key = variable_get('myability_ai_api_key', '');
+
+  if (empty($api_key)) {
+    watchdog('myability_ai_api', 'No API key set for Open AI', [], WATCHDOG_ERROR);
+    return '';
+  }
+  $data = [
+    'model' => $model,
+    'messages' => [
+      [
+        'role' => 'user',
+        'content' => $prompt,
+      ],
+    ],
+    'temperature' => $temperature,
+  ];
+  if ($as_json) {
+    $data['response_format']['type'] = 'json_object';
+  }
+  $options = [
+    'headers' => [
+      'Content-Type' => 'application/json',
+      'Authorization' => 'Bearer ' . $api_key,
+    ],
+    'method' => 'POST',
+    'data' => drupal_json_encode($data),
+  ];
+  $result = drupal_http_request('https://api.openai.com/v1/chat/completions', $options);
+  if ($result->code == 200 && !empty($result->data)) {
+    $response = drupal_json_decode($result->data);
+    $message = $response['choices'][0]['message']['content'];
+    watchdog(
+      'myability_ai_api',
+      "Open AI request. Prompt: @prompt. Response: @message. Usage: @usage",
+      [
+        '@prompt' => drupal_substr($prompt, 0, 500),
+        '@message' => drupal_substr($message, 0, 500),
+        '@usage' => print_r($response['usage'], TRUE),
+      ],
+      WATCHDOG_INFO
+    );
+    return $message;
+  }
+  else {
+    watchdog('myability_ai_api', 'Error retrieving results for Open AI (@code)', ['@code' => $result->code], WATCHDOG_ERROR);
+  }
+  return '';
+}
+
+/**
+ * Helper function that sends a request to OpenAI Text To Speech.
+ *
+ * @param string $text
+ *   The text to convert to speech.
+ * @param string $voice
+ *   The voice to use for the speech.
+ * @param string $response_format
+ *   The response format to use.
+ * @param string $speed
+ *   The speed of the speech.
+ * @param string $instructions
+ *   Additional instructions for the speech.
+ *
+ * @return string
+ *   The audio data from OpenAI.
+ */
+function myability_ai_api_send_tts_request(string $text, string $voice = 'alloy', string $response_format = 'mp3', string $speed = '1.0', string $instructions = ''): string {
+  $api_key = variable_get('myability_ai_api_key', '');
+
+  if (empty($api_key)) {
+    watchdog('myability_ai_api', 'No API key set for Open AI', [], WATCHDOG_ERROR);
+    return '';
+  }
+  $data = [
+    'model' => 'gpt-4o-mini-tts',
+    'input' => $text,
+    'voice' => $voice,
+    'response_format' => $response_format,
+    'speed' => $speed,
+  ];
+  if (!empty($instructions)) {
+    $data['instructions'] = $instructions;
+  }
+  $options = [
+    'headers' => [
+      'Content-Type' => 'application/json',
+      'Authorization' => 'Bearer ' . $api_key,
+    ],
+    'method' => 'POST',
+    'data' => drupal_json_encode($data),
+  ];
+  $result = drupal_http_request('https://api.openai.com/v1/audio/speech', $options);
+
+  if ($result->code == 200 && !empty($result->data)) {
+    watchdog(
+      'myability_ai_api',
+      "Open AI Text To Speech request. Text: @text.",
+      [
+        '@text' => drupal_substr($text, 0, 500),
+      ],
+      WATCHDOG_INFO
+    );
+    return $result->data;
+  }
+  else {
+    watchdog('myability_ai_api', 'Error retrieving results for Open AI Text To Speech (@code)', ['@code' => $result->code], WATCHDOG_ERROR);
+  }
+  return '';
+}

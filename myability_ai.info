@@ -1,0 +1,6 @@
+name = MyAbility AI
+description = MyAbility AI features.
+core = 7.x
+package = MyAbility AI
+
+dependencies[] = myability_ai_api
