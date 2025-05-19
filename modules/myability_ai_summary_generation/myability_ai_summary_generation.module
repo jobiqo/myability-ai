@@ -655,13 +655,11 @@ function myability_ai_summary_generation_entity_presave($entity, $type) {
       $target_field = $config->target_field;
       $source_field_langcode = field_language($type, $entity, $source_field);
       $target_field_langcode = field_language($type, $entity, $target_field);
-      $empty_source_now = empty($entity->{$source_field}[$source_field_langcode][0]['value']);
-      $empty_source_before = empty($entity->original->{$source_field}[$source_field_langcode][0]['value']);
+      $source_value_now = $entity->{$source_field}[$source_field_langcode][0]['value'] ?? '';
+      $source_value_before = $entity->original->{$source_field}[$source_field_langcode][0]['value'] ?? '';
 
       // Check if the source field has changed.
-      if (($empty_source_before != $empty_source_now)
-         || ($entity->{$source_field}[$source_field_langcode][0]['value'] != $entity->original->{$source_field}[$source_field_langcode][0]['value'])
-      ) {
+      if ($source_value_now != $source_value_before) {
         // Delete the target field content.
         $entity->{$target_field}[$target_field_langcode] = NULL;
       }
