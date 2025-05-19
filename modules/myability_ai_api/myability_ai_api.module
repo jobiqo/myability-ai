@@ -119,7 +119,7 @@ function myability_ai_api_send_chat_request(string $prompt, float $temperature =
  *   The voice to use for the speech.
  * @param string $response_format
  *   The response format to use.
- * @param string $speed
+ * @param float $speed
  *   The speed of the speech.
  * @param string $instructions
  *   Additional instructions for the speech.
@@ -127,7 +127,7 @@ function myability_ai_api_send_chat_request(string $prompt, float $temperature =
  * @return string
  *   The audio data from OpenAI.
  */
-function myability_ai_api_send_tts_request(string $text, string $voice = 'alloy', string $response_format = 'mp3', string $speed = '1.0', string $instructions = ''): string {
+function myability_ai_api_send_tts_request(string $text, string $voice = 'alloy', string $response_format = 'mp3', float $speed = 1.0, string $instructions = ''): string {
   $api_key = variable_get('myability_ai_api_key', '');
 
   if (empty($api_key)) {
