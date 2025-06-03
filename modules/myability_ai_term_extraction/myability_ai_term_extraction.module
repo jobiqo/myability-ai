@@ -366,10 +366,7 @@ function myability_ai_term_extraction_entity_presave($entity, $type) {
   foreach ($configs as $config) {
     $source_field_langcode = field_language($type, $entity, $config->source_field);
     $target_field_langcode = field_language($type, $entity, $config->target_field);
-    if (!empty($entity->{$config->source_field})
-      // Check if the target field is empty or the source field was changed.
-      && (empty($entity->{$config->target_field}[$target_field_langcode]) || (!empty($entity->original->{$config->source_field}) && $entity->original->{$config->source_field}[$source_field_langcode][0]['value'] != $entity->{$config->source_field}[$source_field_langcode][0]['value']))
-    ) {
+    if (myability_ai_term_extraction_should_extract($entity, $type, $config)) {
       $prompt = $config->prompt;
       $prompt .= PHP_EOL . ' Return your answer in JSON format with 1 field: "terms" containing an array of the extracted term names. Make sure to return the term names exactly as they appear in the term options list.';
 
@@ -412,4 +409,32 @@ function myability_ai_term_extraction_entity_presave($entity, $type) {
       }
     }
   }
+}
+
+/**
+ * Determines if term extraction should be performed for a given entity.
+ *
+ * @param object $entity
+ *   The entity on which to check term extraction.
+ * @param string $type
+ *   The entity type (e.g., 'node', 'user').
+ * @param \MyabilityAITermExtractionConfig $config
+ *   The configuration for term extraction.
+ *
+ * @return bool
+ *   TRUE if term extraction should be performed, FALSE otherwise.
+ */
+function myability_ai_term_extraction_should_extract(object $entity, string $type, MyabilityAITermExtractionConfig $config): bool {
+  $should_extract = FALSE;
+  $source_field_langcode = field_language($type, $entity, $config->source_field);
+  $target_field_langcode = field_language($type, $entity, $config->target_field);
+  if (!empty($entity->{$config->source_field})
+    // Check if the target field is empty or the source field was changed.
+    && (empty($entity->{$config->target_field}[$target_field_langcode]) || (!empty($entity->original->{$config->source_field}) && $entity->original->{$config->source_field}[$source_field_langcode][0]['value'] != $entity->{$config->source_field}[$source_field_langcode][0]['value']))
+  ) {
+    $should_extract = TRUE;
+  }
+  // Allow other modules to alter the extraction decision.
+  drupal_alter('myability_ai_term_extraction_should_extract', $should_extract, $entity, $type, $config);
+  return $should_extract;
 }
