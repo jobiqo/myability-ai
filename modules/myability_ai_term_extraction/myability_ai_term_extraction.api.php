@@ -35,7 +35,7 @@ function hook_myability_ai_term_extraction_source_text_alter(string &$source_tex
  *
  * @return void
  */
-function hook_myability_ai_term_extraction_should_extract(bool &$should_extract, object $entity, string $type, MyabilityAITermExtractionConfig $config): void {
+function hook_myability_ai_term_extraction_should_extract_alter(bool &$should_extract, object $entity, string $type, MyabilityAITermExtractionConfig $config): void {
   if ($type === 'node') {
     $should_extract = FALSE;
   }
