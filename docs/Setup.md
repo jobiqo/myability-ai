@@ -30,11 +30,11 @@ admin/config/myability_ai/api
 4. Fill out the configuration form. Choose entity type and bundles for which you want to generate Text To Speech. Choose source and target field, voice, response format, speed and optionally add instructions for the voice. Once ready to test/use, set the status to active.
 5. In the settings of the chosen entity type/bundle, set ‘MyAbility AI Text To Speech Formatter’ as an active field formatter and check the ‘Dummy audio generate button’ checkbox if you wish to use that feature. Do this for all the display modes, where you want the users to be able to generate the summaries (e.g. Default, Teaser).
 6. An optional safety limit for maximum input text length in characters can be set in the general Text To Speech settings by visiting a configuration form at ‘admin/config/myability_ai/text_to_speech/settings’.
-7. Test by visiting a page with a desired entity/bundle with a chosen display mode. Generate an audio by clicking the button rendered in the field markup.
+7. Test by visiting a page with a desired entity/bundle with a chosen display mode. Generate an audio by clicking the button/dummy player rendered in the field markup.
 
 ## Submodule: MyAbility AI Term Extraction (myability_ai_term_extraction)
 1. Enable the ‘myability_ai_term_extraction’ module.
 2. Visit ‘admin/config/myability_ai/term_extraction’ - this is an overview of all Term extraction configuration entities defined on the site.
 3. Click the ‘Add Term Extraction Config’ link in the top part of the page.
 4. Fill out the configuration form. Choose entity type and bundles for which you want to generate summaries. Choose source and target fields and prepare a prompt with instructions on how the terms should be extracted. Once ready to test/use, set the status to active.
-5. Test by saving an entity with the source field present. The target field should now contain the extracted term references.
+5. Test by saving an entity with the source field value present. The target field should now contain the extracted term references if there were any found.
