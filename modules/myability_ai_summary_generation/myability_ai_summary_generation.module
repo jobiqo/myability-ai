@@ -499,7 +499,7 @@ function myability_ai_summary_generation_formatter_generate_form(array $form, ar
 function myability_ai_summary_generation_formatter_generate_summary(array $form, array &$form_state): void {
   $commands = [];
   $form_wrapper_selector = '#' . $form_state['storage']['form_wrapper_id'];
-  if (!empty($form_state['storage']['summary_generated'])) {
+  if (isset($form_state['storage']['summary_text'])) {
     $commands[] = ajax_command_replace($form_wrapper_selector, render($form_state['storage']['summary_text']));
 
     // Allow other modules to alter the commands (e.g. update dependent fields).
@@ -530,37 +530,51 @@ function myability_ai_summary_generation_formatter_generate_form_submit(array $f
   $entity = entity_load_single($entity_type, $entity_id);
   $config = $form_state['config'];
 
-  $source_text = '';
-  $source_field_langcode = field_language($entity_type, $entity, $config->source_field);
-  foreach ($entity->{$config->source_field}[$source_field_langcode] as $value) {
-    $source_text .= $value['value'] . ' ';
+  $replace_with_summary = FALSE;
+  // Check if the target field is already populated to make sure
+  // we do not call the AI unnecessarily
+  // (i.e. in case multiple users try to generate at the same time).
+  $target_field_langcode = field_language($entity_type, $entity, $config->target_field);
+  if (!empty($entity->{$config->target_field}[$target_field_langcode][0]['value'])) {
+    // Target field already populated, set variable to ensure replacement.
+    $replace_with_summary = TRUE;
   }
-
-  $prompt = $config->prompt . ' Return your answer in JSON format with 1 field: "summary" containing the summarized text in the same language as source text.' . PHP_EOL . ' Source text: ' . $source_text;
-  $result = myability_ai_api_send_chat_request($prompt);
-  $result = json_decode($result, TRUE);
-
-  if (!empty($result['summary'])) {
-    $summary = $result['summary'];
-
-    $target_field_langcode = field_language($entity_type, $entity, $config->target_field);
-    $summary_value = [
-      'value' => $summary,
-    ];
-
-    $instance = field_info_instance($entity_type, $config->target_field, $entity->type);
-    if (!empty($instance['settings']['text_processing'])) {
-      $summary_value['format'] = filter_default_format();
+  else {
+    $source_text = '';
+    $source_field_langcode = field_language($entity_type, $entity, $config->source_field);
+    foreach ($entity->{$config->source_field}[$source_field_langcode] as $value) {
+      $source_text .= $value['value'] . ' ';
     }
 
-    $entity->{$config->target_field}[$target_field_langcode][0] = $summary_value;
+    $prompt = $config->prompt . ' Return your answer in JSON format with 1 field: "summary" containing the summarized text in the same language as source text.' . PHP_EOL . ' Source text: ' . $source_text;
+    $result = myability_ai_api_send_chat_request($prompt);
+    $result = json_decode($result, TRUE);
 
+    if (!empty($result['summary'])) {
+      $summary = $result['summary'];
+
+      $target_field_langcode = field_language($entity_type, $entity, $config->target_field);
+      $summary_value = [
+        'value' => $summary,
+      ];
+
+      $instance = field_info_instance($entity_type, $config->target_field, $entity->type);
+      if (!empty($instance['settings']['text_processing'])) {
+        $summary_value['format'] = filter_default_format();
+      }
+
+      $entity->{$config->target_field}[$target_field_langcode][0] = $summary_value;
+      entity_save($entity_type, $entity);
+      $replace_with_summary = TRUE;
+    }
+  }
+
+  if ($replace_with_summary) {
+    // Prepare the rendered output of the target field.
     $display = ['type' => 'myability_ai_summary_formatter'];
     $items = field_get_items($entity_type, $entity, $config->target_field, $display);
     $output = field_view_value($entity_type, $entity, $config->target_field, $items[0], $display);
     $form_state['storage']['summary_text'] = $output;
-    entity_save($entity_type, $entity);
-    $form_state['storage']['summary_generated'] = TRUE;
   }
 }
 
