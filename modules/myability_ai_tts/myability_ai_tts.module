@@ -639,7 +639,7 @@ function myability_ai_tts_formatter_generate_form(array $form, array &$form_stat
 function myability_ai_tts_formatter_generate_speech_ajax(array $form, array &$form_state): void {
   $commands = [];
   $form_wrapper_selector = '#' . $form_state['storage']['form_wrapper_id'];
-  if (!empty($form_state['storage']['audio_generated'])) {
+  if (isset($form_state['storage']['audio_html'])) {
     $commands[] = ajax_command_replace($form_wrapper_selector, render($form_state['storage']['audio_html']));
 
     if (!empty($form_state['storage']['autoplay_generated'])) {
@@ -675,81 +675,92 @@ function myability_ai_tts_formatter_generate_form_submit(array $form, array &$fo
   $entity = entity_load_single($entity_type, $entity_id);
   $config = $form_state['config'];
 
-  $source_text = '';
-  $source_field_langcode = field_language($entity_type, $entity, $config->source_field);
-  foreach ($entity->{$config->source_field}[$source_field_langcode] as $value) {
-    $source_text .= $value['value'] . ' ';
-  }
-  $audio_format = $config->response_format;
-  $voice = $config->voice;
-  $speed = $config->speed;
-  $instructions = $config->instructions ?? '';
-
-  $source_text = strip_tags($source_text);
-
-  // If source text is longer than $limit characters,
-  // split it into chunks on last '.' before the limit.
-  // OpenAI limit is 4096 characters,
-  // we use 2500 to make sure the request does not time out.
-  $limit = 2500;
-  if (drupal_strlen($source_text) > $limit) {
-    $chunks = [];
-    while (drupal_strlen($source_text) > $limit) {
-      $last_period = mb_strrpos(drupal_substr($source_text, 0, $limit), '.');
-      if ($last_period === FALSE) {
-        // Fallback: If no period is found, split at a space.
-        $last_period = mb_strrpos(drupal_substr($source_text, 0, $limit), ' ');
-      }
-      $chunks[] = trim(drupal_substr($source_text, 0, $last_period + 1));
-      $source_text = drupal_substr($source_text, $last_period + 1);
-    }
-    // Add the remaining text as the last chunk.
-    if (!empty($source_text)) {
-      $chunks[] = trim($source_text);
-    }
+  $replace_with_audio = FALSE;
+  // Check if the target field already has a value.
+  $target_field_langcode = field_language($entity_type, $entity, $config->target_field);
+  if (!empty($entity->{$config->target_field}[$target_field_langcode][0]['fid'])) {
+    // Target field already populated, set variable to ensure replacement.
+    $replace_with_audio = TRUE;
   }
   else {
-    $chunks = [$source_text];
-  }
-
-  // Send the chunks to the TTS API and save the audio file.
-  $result = '';
-  foreach ($chunks as $index => $chunk) {
-    $chunk_instructions = $instructions;
-    if ($index > 0) {
-      // If this is not the first chunk, add a note to the instructions
-      // to avoid confusing intonation changes.
-      $chunk_instructions = 'You are continuing a speech that started earlier. Do not put an emphasis on the start. ' . $chunk_instructions;
+    $source_text = '';
+    $source_field_langcode = field_language($entity_type, $entity, $config->source_field);
+    foreach ($entity->{$config->source_field}[$source_field_langcode] as $value) {
+      $source_text .= $value['value'] . ' ';
     }
-    $result .= myability_ai_api_send_tts_request($chunk, $voice, $audio_format, $speed, $chunk_instructions);
+    $audio_format = $config->response_format;
+    $voice = $config->voice;
+    $speed = $config->speed;
+    $instructions = $config->instructions ?? '';
+
+    $source_text = strip_tags($source_text);
+
+    // If source text is longer than $limit characters,
+    // split it into chunks on last '.' before the limit.
+    // OpenAI limit is 4096 characters,
+    // we use 2500 to make sure the request does not time out.
+    $limit = 2500;
+    if (drupal_strlen($source_text) > $limit) {
+      $chunks = [];
+      while (drupal_strlen($source_text) > $limit) {
+        $last_period = mb_strrpos(drupal_substr($source_text, 0, $limit), '.');
+        if ($last_period === FALSE) {
+          // Fallback: If no period is found, split at a space.
+          $last_period = mb_strrpos(drupal_substr($source_text, 0, $limit), ' ');
+        }
+        $chunks[] = trim(drupal_substr($source_text, 0, $last_period + 1));
+        $source_text = drupal_substr($source_text, $last_period + 1);
+      }
+      // Add the remaining text as the last chunk.
+      if (!empty($source_text)) {
+        $chunks[] = trim($source_text);
+      }
+    }
+    else {
+      $chunks = [$source_text];
+    }
+
+    // Send the chunks to the TTS API and save the audio file.
+    $result = '';
+    foreach ($chunks as $index => $chunk) {
+      $chunk_instructions = $instructions;
+      if ($index > 0) {
+        // If this is not the first chunk, add a note to the instructions
+        // to avoid confusing intonation changes.
+        $chunk_instructions = 'You are continuing a speech that started earlier. Do not put an emphasis on the start. ' . $chunk_instructions;
+      }
+      $result .= myability_ai_api_send_tts_request($chunk, $voice, $audio_format, $speed, $chunk_instructions);
+    }
+
+    if (!empty($result)) {
+      [, , $bundle] = entity_extract_ids($entity_type, $entity);
+      $field = field_info_field($config->target_field);
+      $uri_scheme = $field['settings']['uri_scheme'];
+      $field_instance = field_info_instance($entity_type, $config->target_field, $bundle);
+      $directory = $uri_scheme . '://' . $field_instance['settings']['file_directory'];
+      // Prepare the directory.
+      file_prepare_directory($directory, FILE_CREATE_DIRECTORY);
+      // Add timestamp to the filename to avoid browser cache issues.
+      $timestamp = REQUEST_TIME;
+      $file = file_save_data($result, $directory . "/speech-$entity_type-$entity_id-$config->target_field-$timestamp.$audio_format", FILE_EXISTS_REPLACE);
+      $entity->{$config->target_field}[$source_field_langcode][0] = [
+        'fid' => $file->fid,
+        'display' => 1,
+      ];
+      entity_save($entity_type, $entity);
+
+      // Re-load the entity to get the updated field value displayed properly.
+      $entity = entity_load_single($entity_type, $entity_id);
+      $replace_with_audio = TRUE;
+    }
   }
 
-  if (!empty($result)) {
-    [, , $bundle] = entity_extract_ids($entity_type, $entity);
-    $field = field_info_field($config->target_field);
-    $uri_scheme = $field['settings']['uri_scheme'];
-    $field_instance = field_info_instance($entity_type, $config->target_field, $bundle);
-    $directory = $uri_scheme . '://' . $field_instance['settings']['file_directory'];
-    // Prepare the directory.
-    file_prepare_directory($directory, FILE_CREATE_DIRECTORY);
-    // Add timestamp to the filename to avoid browser cache issues.
-    $timestamp = REQUEST_TIME;
-    $file = file_save_data($result, $directory . "/speech-$entity_type-$entity_id-$config->target_field-$timestamp.$audio_format", FILE_EXISTS_REPLACE);
-    $entity->{$config->target_field}[$source_field_langcode][0] = [
-      'fid' => $file->fid,
-      'display' => 1,
-    ];
-    entity_save($entity_type, $entity);
-
-    // Re-load the entity to get the updated field value displayed properly.
-    $entity = entity_load_single($entity_type, $entity_id);
-
+  if ($replace_with_audio) {
     $display = ['type' => 'myability_ai_tts_formatter'];
     $items = field_get_items($entity_type, $entity, $config->target_field, $display);
     $output = field_view_value($entity_type, $entity, $config->target_field, $items[0], $display);
     $form_state['storage']['audio_html'] = $output;
-    $form_state['storage']['audio_generated'] = TRUE;
-    $form_state['storage']['fid'] = $file->fid;
+    $form_state['storage']['fid'] = $entity->{$config->target_field}[$target_field_langcode][0]['fid'];
   }
 }
 
